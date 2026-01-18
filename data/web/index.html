@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ESP LED Control</title>
+<style>
+  :root {
+    --bg-color: #000;
+    --text-color: #fff;
+    --border-color: #242424;
+    --radius: 8px;
+    --accent-color: #51b5ea;
+    --menu-bg: #ffffff;
+    --menu-fg: #136ba0;
+    --sans-serif: "Source Sans Pro", sans-serif;
+    --monospace: "Source Code Pro", monospace;
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--sans-serif);
+    background: var(--bg-color);
+    color: var(--text-color);
+    justify-content: center;
+    padding: 3rem;
+  }
+
+  /* modified https://codepen.io/Northstrix/pen/yyONbPX */
+  .slider {
+    appearance: none;
+    -webkit-appearance: none;
+    height: 10px;
+    width: 100%;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    cursor: pointer;
+    margin: 0;
+  }
+
+  .slider::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    appearance: none;
+    width: 8px;
+    height: 18px;
+    background: #fff;
+    border-radius: 8px;
+    border: 1px solid #000;
+    cursor: pointer;
+  }
+
+  .slider::-moz-range-thumb {
+    width: 8px;
+    height: 18px;
+    background: white;
+    border-radius: 8px;
+    border: 1px solid #000;
+    cursor: pointer;
+  }
+
+  #hexInput input[type="text"] {
+    /* match width to the length of 6 character hex code */
+    width: calc(0.6em * 6);
+    padding: 8px;
+    /* center horizontally */
+    display: block;
+    margin: 10px auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    background: var(--bg-color);
+    color: var(--text-color);
+    font-size: 1.2em;
+    font-family: var(--monospace);
+    text-align: left;
+  }
+
+  .section {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    padding: 0 10px;
+    margin: 10px 0;
+  }
+
+  .section > * {
+    margin: 10px 0;
+    text-align: center;
+    font-weight: normal;
+  }
+
+  #colorCard {
+    width: 100%;
+    height: 30px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+  }
+
+  #status {
+    text-align: center;
+    margin: 10px auto;
+    font-size: 0.9em;
+    opacity: 0.7;
+  }
+</style>
+</head>
+<body>
+
+<div id="status">Connecting…</div>
+
+<div id="colorPicker" class="section">
+  <h5>HSV Color Picker</h5>
+  <div id="colorCard"></div>
+  <input type="range" id="hueSlider" class="slider" min="0" max="255">
+  <input type="range" id="satSlider" class="slider" min="0" max="255">
+  <input type="range" id="valSlider" class="slider" min="0" max="255">
+</div>
+
+<div id="hexInput" class="section">
+  <h5>Hex Color Input</h5>
+  <input type="text" id="hexField" placeholder="" maxlength="6"">
+</div>
+
+</div>
+
+<script>
+const hueSlider = document.getElementById("hueSlider");
+const satSlider = document.getElementById("satSlider");
+const valSlider = document.getElementById("valSlider");
+const sliders = [hueSlider, satSlider, valSlider];
+
+const status = document.getElementById("status");
+
+const hexField = document.getElementById("hexField");
+
+let h = 0;
+let s = 1;
+let v = 1;
+let ws;
+
+/* ---------- WebSocket ---------- */
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+
+  ws.onopen = () => status.textContent = "Connected";
+  ws.onclose = () => {
+    status.textContent = "Disconnected – retrying";
+    setTimeout(connect, 1000);
+  };
+}
+
+/* ---------- HSL Color Picker ---------- */
+
+function hsv255ToHsl(h, s, v) {
+  const hf = (h / 255) * 360;
+  const sf = s / 255;
+  const vf = v / 255;
+
+  const l = vf * (1 - sf / 2);
+  const sl = l === 0 || l === 1
+    ? 0
+    : (vf - l) / Math.min(l, 1 - l);
+
+  return {
+    h: hf,
+    s: sl * 100,
+    l: l * 100
+  };
+}
+
+function updateColorCard() {
+  const h = +hueSlider.value;
+  const s = +satSlider.value;
+  const v = +valSlider.value;
+
+  const { h: H, s: S, l: L } = hsv255ToHsl(h, s, v);
+
+  colorCard.style.backgroundColor = `hsl(${H}, ${S}%, ${L}%)`;
+}
+
+function updateHueGradient() {
+  const s = +satSlider.value / 255;
+  const v = (+valSlider.value / 255) + (1 - s) * (+valSlider.value / 255);
+
+  hueSlider.style.background = `
+    linear-gradient(to right,
+      hsl(0, ${s * 100}%, ${v * 50}%),
+      hsl(60, ${s * 100}%, ${v * 50}%),
+      hsl(120, ${s * 100}%, ${v * 50}%),
+      hsl(180, ${s * 100}%, ${v * 50}%),
+      hsl(240, ${s * 100}%, ${v * 50}%),
+      hsl(300, ${s * 100}%, ${v * 50}%),
+      hsl(360, ${s * 100}%, ${v * 50}%)
+    )
+  `;
+}
+
+function updateSatGradient() {
+  const h = (+hueSlider.value / 255) * 360;
+  const v = +valSlider.value / 255;
+
+  satSlider.style.background = `
+    linear-gradient(to right,
+      hsl(${h}, 0%, ${v * 100}%),
+      hsl(${h}, 100%, ${v * 50}%)
+    )
+  `;
+}
+
+function updateValGradient() {
+  const h = (+hueSlider.value / 255) * 360;
+  const s = +satSlider.value / 255;
+
+  valSlider.style.background = `
+    linear-gradient(to right,
+      hsl(${h}, ${s * 100}%, 0%),
+      hsl(${h}, ${s * 100}%, 100%)
+    )
+  `;
+}
+
+function sendHSV() {
+  if (ws.readyState === WebSocket.OPEN) {
+    let command = {
+      cmd: "setAllHSV",
+      h, s, v
+    };
+
+    //console.log(command);
+    ws.send(JSON.stringify(command));
+  }
+}
+
+function updateAll() {
+  updateColorCard();
+  updateHueGradient();
+  updateSatGradient();
+  updateValGradient();
+}
+
+// Only update the other slider colors.
+// The currently moving slider does not change gradient as it is moved.
+hueSlider.addEventListener("input", () => {
+  updateColorCard();
+  updateSatGradient();
+  updateValGradient();
+});
+
+satSlider.addEventListener("input", () => {
+  updateColorCard();
+  updateHueGradient();
+  updateValGradient();
+});
+
+valSlider.addEventListener("input", () => {
+  updateColorCard();
+  updateHueGradient();
+  updateSatGradient();
+});
+
+// send color to esp when any of them are changed
+sliders.forEach(slider =>
+  slider.addEventListener("input", () => {
+    h = hueSlider.value / 255;
+    s = satSlider.value / 255;
+    v = valSlider.value / 255;
+    sendHSV()
+    //update hex field too
+    updateHexField(hueSlider.value, satSlider.value, valSlider.value);
+  })
+);
+
+/* ---------- HEX Color Picker ---------- */
+
+hexField.addEventListener("change", () => {
+  const hex = hexField.value;
+  if (/^[0-9A-Fa-f]{6}$/.test(hex)) {
+    hexField.style.boxShadow = "0 0 10px 10px green";
+    sendHex(hex);
+  } else {
+    /* Big red error indicator */
+    hexField.style.boxShadow = "0 0 10px 10px red";
+  }
+});
+
+/**
+ * Converts an RGB color value to HSV. Conversion formula
+ * adapted from http://en.wikipedia.org/wiki/HSV_color_space.
+ * Assumes r, g, and b are contained in the set [0, 255] and
+ * returns h, s, and v in the set [0, 1].
+ *
+ * @param   Number  r       The red color value
+ * @param   Number  g       The green color value
+ * @param   Number  b       The blue color value
+ * @return  Array           The HSV representation
+ */
+function rgbToHsv(r, g, b) {
+  r /= 255, g /= 255, b /= 255;
+
+  var max = Math.max(r, g, b), min = Math.min(r, g, b);
+  var h, s, v = max;
+
+  var d = max - min;
+  s = max == 0 ? 0 : d / max;
+
+  if (max == min) {
+    h = 0; // achromatic
+  } else {
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
+    }
+
+    h /= 6;
+  }
+
+  return [ h, s, v ];
+}
+
+/**
+ * Converts an HSV color value to RGB. Conversion formula
+ * adapted from http://en.wikipedia.org/wiki/HSV_color_space.
+ * Assumes h, s, and v are contained in the set [0, 1] and
+ * returns r, g, and b in the set [0, 255].
+ *
+ * @param   Number  h       The hue
+ * @param   Number  s       The saturation
+ * @param   Number  v       The value
+ * @return  Array           The RGB representation
+ */
+function hsvToRgb(h, s, v) {
+  var r, g, b;
+
+  var i = Math.floor(h * 6);
+  var f = h * 6 - i;
+  var p = v * (1 - s);
+  var q = v * (1 - f * s);
+  var t = v * (1 - (1 - f) * s);
+
+  switch (i % 6) {
+    case 0: r = v, g = t, b = p; break;
+    case 1: r = q, g = v, b = p; break;
+    case 2: r = p, g = v, b = t; break;
+    case 3: r = p, g = q, b = v; break;
+    case 4: r = t, g = p, b = v; break;
+    case 5: r = v, g = p, b = q; break;
+  }
+
+  return [ r * 255, g * 255, b * 255 ];
+}
+
+function updateHexField(h, s, v) {
+  const tcol = hsvToRgb(h, s, v);
+  const hex = ((1 << 24) + (tcol[0] << 16) + (tcol[1] << 8) + tcol[2])
+    .toString(16)
+    .slice(1)
+    .toUpperCase();
+  hexField.value = hex;
+}
+
+function sendRGB(r, g, b) {
+  if (ws.readyState === WebSocket.OPEN) {
+    let command = {
+      cmd: "setAllRGB",
+      r, g, b
+    };
+
+    //console.log(command);
+    ws.send(JSON.stringify(command));
+  }
+}
+
+function sendHex(hex) {
+  // convert hex to r, g, b
+  // assumes no hashtag
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  sendRGB(r, g, b);
+
+  // also update the HSV sliders to match
+  const tcol = rgbToHsv(r, g, b);
+  hueSlider.value = tcol[0]*255;
+  satSlider.value = tcol[1]*255;
+  valSlider.value = tcol[2]*255;
+  updateAll();
+}
+
+updateAll();
+updateHexField(hueSlider.value, satSlider.value, valSlider.value);
+
+connect();
+
+</script>
+
+</body>
+</html>
