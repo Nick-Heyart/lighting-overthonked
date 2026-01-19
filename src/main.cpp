@@ -55,6 +55,8 @@ unsigned long lastCommandMillis = 0;
 bool commandDirty = false;
 String lastCommandString = "";
 
+bool animationRunning = false;
+
 void jsonCommand(const String& json) {
 	JsonDocument doc;
 	DeserializationError err = deserializeJson(doc, json);
@@ -81,6 +83,8 @@ void jsonCommand(const String& json) {
 			strip.ClearTo(colorGamma.Correct(RgbColor(HsbColor(h, s, v))));
 			strip.Show();
 		}
+
+		animationRunning = false;
 	}
 	else if (strcmp(doc["cmd"] | "", "setAllRGB") == 0) {
 		int r = doc["r"];
@@ -96,6 +100,10 @@ void jsonCommand(const String& json) {
 
 		strip.ClearTo(RgbColor(r, g, b));
 		strip.Show();
+
+		animationRunning = false;
+	} else if (strcmp(doc["cmd"] | "", "startAnimation") == 0) {
+		animationRunning = true;
 	}
 }
 
@@ -110,15 +118,17 @@ void onWsEvent(
 		AwsFrameInfo* info = (AwsFrameInfo*)arg;
 
 		if (info->opcode == WS_TEXT && info->final) {
-			char* buf = (char*)malloc(len + 1);
-			if (buf) {
-				memcpy(buf, data, len);
-				buf[len] = '\0';
-				String payload = String(buf);
-				free(buf);
-				jsonCommand(payload);
-			} else {
-				Serial.println("Payload alloc failed");
+			{
+				char* buf = (char*)malloc(len + 1);
+				if (buf) {
+					memcpy(buf, data, len);
+					buf[len] = 0;
+					String payload = String(buf);
+					free(buf);
+					jsonCommand(payload);
+				} else {
+					jsonCommand(String());
+				}
 			}
 			// update last command timestamp
 			lastCommandMillis = millis();
@@ -159,9 +169,10 @@ void setup() {
 	else {
 		Serial.println("init.json found, running command.");
 		initJson = LittleFS.open("/init.json", "r");
-		String jsonString = initJson.readString();
+		String saved = initJson.readString();
 		initJson.close();
-		jsonCommand(jsonString);
+		Serial.println(saved);
+		jsonCommand(saved);
 	}
 
 	Serial.println(lastCommandString);
@@ -302,7 +313,9 @@ void setup() {
 		});
 
 	ArduinoOTA.onEnd([]() { Serial.println("\nEnd"); });
-	ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
+	ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+		Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+	});
 	ArduinoOTA.onError([](ota_error_t error) {
 		Serial.printf("Error[%u]: ", error);
 		if (error == OTA_AUTH_ERROR) {
@@ -324,6 +337,14 @@ void setup() {
 		Serial.println("OTA ready.");
 }
 
+RgbColor grad1(HtmlColor(0x3B20FF));
+RgbColor grad2(HtmlColor(0xFF1CFF));
+RgbColor grad3(HtmlColor(0x665AFF));
+
+float phase1 = 0.0f;
+float phase2 = 0.0f;
+float phase3 = 0.0f;
+
 void loop() {
 	ws.cleanupClients();
 	ArduinoOTA.handle();
@@ -340,5 +361,65 @@ void loop() {
 			initJson.close();
 			commandDirty = false;
 		}
+	}
+
+	//Serial.println(animationRunning);
+
+	if (animationRunning) {
+		// calculate sine values and normalize them
+		float sin1 = (sinf(phase1) + 1)/2;
+		float sin2 = (sinf(phase2) + 1)/2;
+		float sin3 = (sinf(phase3) + 1)/2;
+
+		Serial.print("Sines: ");
+		Serial.print(sin1);
+		Serial.print(", ");
+		Serial.print(sin2);
+		Serial.print(", ");
+		Serial.print(sin3);
+		Serial.print(" | RGB: ");
+
+		// mix gradient colors based on sine phases
+		float r = grad1.R * sin1 + grad2.R * sin2 + grad3.R * sin3;
+		float g = grad1.G * sin1 + grad2.G * sin2 + grad3.G * sin3;
+		float b = grad1.B * sin1 + grad2.B * sin2 + grad3.B * sin3;
+
+		// normalize based on Blue. Blue should always be 255.
+		float normFactor = 255.0f / b;
+		r *= normFactor;
+		g *= normFactor;
+		b *= normFactor;
+
+		// boost red slightly
+		float rDefeciet = 255.0f - r;
+		r += rDefeciet * 0.5f;
+
+		// but don't let it get too crazy
+		r -= 20.0f;
+
+		Serial.print(r);
+		Serial.print(", ");
+		Serial.print(g);
+		Serial.print(", ");
+		Serial.println(b);
+
+		// display mixed color on first pixel and shift
+		RgbColor mixedColor = RgbColor((uint8_t)r, (uint8_t)g, (uint8_t)b);
+
+		strip.SetPixelColor(0, colorGamma.Correct(mixedColor));
+		strip.ShiftRight(1);
+		strip.Show();
+
+		// increment phases
+		phase1 += 0.02f;
+		phase2 += 0.025f;
+		phase3 += 0.03f;
+
+		// wrap phases
+		if (phase1 > TWO_PI) phase1 -= TWO_PI;
+		if (phase2 > TWO_PI) phase2 -= TWO_PI;
+		if (phase3 > TWO_PI) phase3 -= TWO_PI;
+
+		delay(20);
 	}
 }
